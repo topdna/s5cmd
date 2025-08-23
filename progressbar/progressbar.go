@@ -14,6 +14,7 @@ type ProgressBar interface {
 	IncrementTotalObjects()
 	AddCompletedBytes(bytes int64)
 	AddTotalBytes(bytes int64)
+	NeedsSize() bool // Returns true if progress bar needs size information for display
 }
 
 type NoOp struct{}
@@ -29,6 +30,10 @@ func (pb *NoOp) IncrementTotalObjects() {}
 func (pb *NoOp) AddCompletedBytes(bytes int64) {}
 
 func (pb *NoOp) AddTotalBytes(bytes int64) {}
+
+func (pb *NoOp) NeedsSize() bool {
+	return false // NoOp progress bar doesn't need size information
+}
 
 type CommandProgressBar struct {
 	totalObjects     int64
@@ -75,4 +80,8 @@ func (cp *CommandProgressBar) AddCompletedBytes(bytes int64) {
 
 func (cp *CommandProgressBar) AddTotalBytes(bytes int64) {
 	cp.progressbar.AddTotal(bytes)
+}
+
+func (cp *CommandProgressBar) NeedsSize() bool {
+	return true // CommandProgressBar needs size information for accurate progress display
 }
