@@ -3,7 +3,7 @@ default: all
 .PHONY: all
 all: clean build check test
 
-VERSION := `git describe --abbrev=0 --tags || echo "0.0.0"`
+VERSION := `git describe --abbrev=0 --tags 2>/dev/null || echo "0.0.0"`
 BUILD := `git rev-parse --short HEAD`
 LDFLAGS=-ldflags "-X=github.com/peak/s5cmd/v2/version.Version=$(VERSION) -X=github.com/peak/s5cmd/v2/version.GitCommit=$(BUILD)"
 
