@@ -51,6 +51,9 @@ const (
 	// Tencent Cloud COS endpoint
 	cosEndpoint = ".myqcloud.com"
 
+	// Volcengine Cloud TOS endpoint
+	tosEndpoint = ".volces.com"
+
 	// the key of the object metadata which is used to handle retry decision on NoSuchUpload error
 	metadataKeyRetryID = "s5cmd-upload-retry-id"
 )
@@ -1429,11 +1432,15 @@ func IsTencentEndpoint(endpoint urlpkg.URL) bool {
 	return strings.HasSuffix(endpoint.Hostname(), cosEndpoint)
 }
 
+func IsVolcengineEndpoint(endpoint urlpkg.URL) bool {
+	return strings.HasSuffix(endpoint.Hostname(), tosEndpoint)
+}
+
 // isVirtualHostStyle reports whether the given endpoint supports S3 virtual
 // host style bucket name resolving. If a custom S3 API compatible endpoint is
 // given, resolve the bucketname from the URL path.
 func isVirtualHostStyle(endpoint urlpkg.URL) bool {
-	return endpoint == sentinelURL || supportsTransferAcceleration(endpoint) || IsGoogleEndpoint(endpoint) || IsTencentEndpoint(endpoint)
+	return endpoint == sentinelURL || supportsTransferAcceleration(endpoint) || IsGoogleEndpoint(endpoint) || IsTencentEndpoint(endpoint) || IsVolcengineEndpoint(endpoint)
 }
 
 func errHasCode(err error, code string) bool {
