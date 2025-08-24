@@ -513,21 +513,32 @@ func (s Sync) planRun(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for commonObject := range common {
-				sourceObject, destObject := commonObject.src, commonObject.dst
-				curSourceURL, curDestURL := sourceObject.URL, destObject.URL
-				err := strategy.ShouldSync(sourceObject, destObject) // check if object should be copied.
-				if err != nil {
-					printDebug(s.op, err, curSourceURL, curDestURL)
-					continue
-				}
+			for {
+				select {
+				case commonObject := <-common:
+					if commonObject == nil {
+						return
+					}
+					sourceObject, destObject := commonObject.src, commonObject.dst
+					curSourceURL, curDestURL := sourceObject.URL, destObject.URL
+					err := strategy.ShouldSync(sourceObject, destObject) // check if object should be copied.
+					if err != nil {
+						printDebug(s.op, err, curSourceURL, curDestURL)
+						continue
+					}
 
-				command, err := generateCommand(c, "cp", defaultFlags, curSourceURL, curDestURL)
-				if err != nil {
-					printDebug(s.op, err, curSourceURL, curDestURL)
-					continue
+					command, err := generateCommand(c, "cp", defaultFlags, curSourceURL, curDestURL)
+					if err != nil {
+						printDebug(s.op, err, curSourceURL, curDestURL)
+						continue
+					}
+					fmt.Fprintln(w, command)
+				case <-ctx.Done():
+					// If the context was cancelled, there was an error.
+					if err := ctx.Err(); err != nil {
+						return
+					}
 				}
-				fmt.Fprintln(w, command)
 			}
 		}()
 	}
@@ -574,10 +585,21 @@ func (s Sync) planRun(
 			}
 			fmt.Fprintln(w, command)
 		} else {
-			// we only need  to consume them from the channel so that rest of the objects
+			// we only need to consume them from the channel so that rest of the objects
 			// can be sent to channel.
-			for d := range onlyDest {
-				_ = d
+			for {
+				select {
+				case d := <-onlyDest:
+					if d == nil {
+						return
+					}
+					_ = d
+				case <-ctx.Done():
+					// If the context was cancelled, there was an error.
+					if err := ctx.Err(); err != nil {
+						return
+					}
+				}
 			}
 		}
 	}()
