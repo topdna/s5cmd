@@ -13,7 +13,7 @@ ifeq ($(OS),Windows_NT)
 endif
 
 semgrep ?= -
-ifeq (,$(shell which semgrep))
+ifeq (,$(shell which semgrep 2>/dev/null))
 	semgrep=echo "-- Running inside Docker --"; docker run --rm -v $$(pwd):/src returntocorp/semgrep:1.65.0 semgrep
 else
 	semgrep=semgrep

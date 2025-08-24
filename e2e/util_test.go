@@ -757,9 +757,10 @@ func putStorageClass(storageClass string) putOption {
 func putFile(t *testing.T, client *s3.S3, bucket string, filename string, content string, opts ...putOption) {
 	t.Helper()
 	input := &s3.PutObjectInput{
-		Body:   strings.NewReader(content),
-		Bucket: aws.String(bucket),
-		Key:    aws.String(filename),
+		Body:          strings.NewReader(content),
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(filename),
+		ContentLength: aws.Int64(int64(len(content))), // Explicitly set ContentLength for all files, including empty ones
 	}
 
 	for _, opt := range opts {
