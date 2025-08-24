@@ -3140,3 +3140,282 @@ func TestSyncHashOnlyNetworkError(t *testing.T) {
 	}
 	assert.Assert(t, hasNetworkError)
 }
+
+// sync --delete --max-delete with limit respected
+func TestSyncWithMaxDeleteLimitRespected(t *testing.T) {
+	t.Parallel()
+
+	s3client, s5cmd := setup(t)
+
+	bucket := s3BucketFromTestName(t)
+	createBucket(t, s3client, bucket)
+
+	// Create destination files that will be deleted
+	destS3Content := map[string]string{
+		"file1.txt": "content 1",
+		"file2.txt": "content 2",
+		"file3.txt": "content 3",
+	}
+
+	for filename, content := range destS3Content {
+		putFile(t, s3client, bucket, filename, content)
+	}
+
+	// Empty local directory (source)
+	workdir := fs.NewDir(t, "somedir")
+	defer workdir.Remove()
+
+	src := fmt.Sprintf("%v/", workdir.Path())
+	src = filepath.ToSlash(src)
+	dst := fmt.Sprintf("s3://%v/", bucket)
+
+	// Max delete limit is 5, we have 3 files to delete, should succeed
+	cmd := s5cmd("sync", "--delete", "--max-delete", "5", src, dst)
+	result := icmd.RunCmd(cmd)
+
+	result.Assert(t, icmd.Success)
+
+	// Should delete all 3 files since 3 <= 5
+	assertLines(t, result.Stdout(), map[int]compareFunc{
+		0: equals(fmt.Sprintf("rm %vfile1.txt", dst)),
+		1: equals(fmt.Sprintf("rm %vfile2.txt", dst)),
+		2: equals(fmt.Sprintf("rm %vfile3.txt", dst)),
+	}, sortInput(true))
+
+	// Verify files are deleted
+	for filename, content := range destS3Content {
+		err := ensureS3Object(s3client, bucket, filename, content)
+		assertError(t, err, errS3NoSuchKey)
+	}
+}
+
+// sync --delete --max-delete with limit exceeded
+func TestSyncWithMaxDeleteLimitExceeded(t *testing.T) {
+	t.Parallel()
+
+	s3client, s5cmd := setup(t)
+
+	bucket := s3BucketFromTestName(t)
+	createBucket(t, s3client, bucket)
+
+	// Create destination files that will be deleted
+	destS3Content := map[string]string{
+		"file1.txt": "content 1",
+		"file2.txt": "content 2",
+		"file3.txt": "content 3",
+		"file4.txt": "content 4",
+		"file5.txt": "content 5",
+	}
+
+	for filename, content := range destS3Content {
+		putFile(t, s3client, bucket, filename, content)
+	}
+
+	// Empty local directory (source)
+	workdir := fs.NewDir(t, "somedir")
+	defer workdir.Remove()
+
+	src := fmt.Sprintf("%v/", workdir.Path())
+	src = filepath.ToSlash(src)
+	dst := fmt.Sprintf("s3://%v/", bucket)
+
+	// Max delete limit is 3, we have 5 files to delete, should refuse
+	cmd := s5cmd("sync", "--delete", "--max-delete", "3", src, dst)
+	result := icmd.RunCmd(cmd)
+
+	result.Assert(t, icmd.Success) // Command succeeds but doesn't delete
+
+	// Should not delete anything and show error message
+	assertLines(t, result.Stderr(), map[int]compareFunc{
+		0: contains("refusing to delete 5 files; more than max-delete limit of 3"),
+	})
+
+	// Should have no rm commands in stdout
+	assertLines(t, result.Stdout(), nil)
+
+	// Verify files are NOT deleted
+	for filename, content := range destS3Content {
+		assert.Assert(t, ensureS3Object(s3client, bucket, filename, content))
+	}
+}
+
+// sync --delete --max-delete 0 (no deletions allowed)
+func TestSyncWithMaxDeleteZero(t *testing.T) {
+	t.Parallel()
+
+	s3client, s5cmd := setup(t)
+
+	bucket := s3BucketFromTestName(t)
+	createBucket(t, s3client, bucket)
+
+	// Create destination file that would be deleted
+	destS3Content := map[string]string{
+		"file1.txt": "content 1",
+	}
+
+	for filename, content := range destS3Content {
+		putFile(t, s3client, bucket, filename, content)
+	}
+
+	// Empty local directory (source)
+	workdir := fs.NewDir(t, "somedir")
+	defer workdir.Remove()
+
+	src := fmt.Sprintf("%v/", workdir.Path())
+	src = filepath.ToSlash(src)
+	dst := fmt.Sprintf("s3://%v/", bucket)
+
+	// Max delete limit is 0, no deletions allowed
+	cmd := s5cmd("sync", "--delete", "--max-delete", "0", src, dst)
+	result := icmd.RunCmd(cmd)
+
+	result.Assert(t, icmd.Success)
+
+	// Should refuse to delete and show error message
+	assertLines(t, result.Stderr(), map[int]compareFunc{
+		0: contains("refusing to delete 1 files; more than max-delete limit of 0"),
+	})
+
+	// Should have no rm commands in stdout
+	assertLines(t, result.Stdout(), nil)
+
+	// Verify file is NOT deleted
+	for filename, content := range destS3Content {
+		assert.Assert(t, ensureS3Object(s3client, bucket, filename, content))
+	}
+}
+
+// sync --delete --max-delete with exact limit
+func TestSyncWithMaxDeleteExactLimit(t *testing.T) {
+	t.Parallel()
+
+	s3client, s5cmd := setup(t)
+
+	bucket := s3BucketFromTestName(t)
+	createBucket(t, s3client, bucket)
+
+	// Create destination files that will be deleted
+	destS3Content := map[string]string{
+		"file1.txt": "content 1",
+		"file2.txt": "content 2",
+		"file3.txt": "content 3",
+	}
+
+	for filename, content := range destS3Content {
+		putFile(t, s3client, bucket, filename, content)
+	}
+
+	// Empty local directory (source)
+	workdir := fs.NewDir(t, "somedir")
+	defer workdir.Remove()
+
+	src := fmt.Sprintf("%v/", workdir.Path())
+	src = filepath.ToSlash(src)
+	dst := fmt.Sprintf("s3://%v/", bucket)
+
+	// Max delete limit is exactly 3, we have 3 files to delete, should succeed
+	cmd := s5cmd("sync", "--delete", "--max-delete", "3", src, dst)
+	result := icmd.RunCmd(cmd)
+
+	result.Assert(t, icmd.Success)
+
+	// Should delete all 3 files since 3 <= 3
+	assertLines(t, result.Stdout(), map[int]compareFunc{
+		0: equals(fmt.Sprintf("rm %vfile1.txt", dst)),
+		1: equals(fmt.Sprintf("rm %vfile2.txt", dst)),
+		2: equals(fmt.Sprintf("rm %vfile3.txt", dst)),
+	}, sortInput(true))
+
+	// Verify files are deleted
+	for filename, content := range destS3Content {
+		err := ensureS3Object(s3client, bucket, filename, content)
+		assertError(t, err, errS3NoSuchKey)
+	}
+}
+
+// sync --delete --max-delete with no files to delete
+func TestSyncWithMaxDeleteNoFilesToDelete(t *testing.T) {
+	t.Parallel()
+
+	s3client, s5cmd := setup(t)
+
+	bucket := s3BucketFromTestName(t)
+	createBucket(t, s3client, bucket)
+
+	// Create matching source and destination files with explicit same timestamp
+	content := "same content"
+	filename := "file1.txt"
+
+	// Put file in S3 first
+	putFile(t, s3client, bucket, filename, content)
+
+	// Create local file with same content and ensure it's newer to avoid sync
+	// Use --size-only to avoid timestamp comparison issues
+	workdir := fs.NewDir(t, "somedir", fs.WithFile(filename, content))
+	defer workdir.Remove()
+
+	src := fmt.Sprintf("%v/", workdir.Path())
+	src = filepath.ToSlash(src)
+	dst := fmt.Sprintf("s3://%v/", bucket)
+
+	// Use --size-only to avoid timestamp comparison and focus on delete testing
+	cmd := s5cmd("sync", "--delete", "--max-delete", "1", "--size-only", src, dst)
+	result := icmd.RunCmd(cmd)
+
+	result.Assert(t, icmd.Success)
+
+	// Should have minimal output since files match in size and no files need deleting
+	assertLines(t, result.Stderr(), nil)
+
+	// Verify file still exists
+	assert.Assert(t, ensureS3Object(s3client, bucket, filename, content))
+}
+
+// sync --delete without --max-delete (unlimited deletions)
+func TestSyncWithDeleteUnlimited(t *testing.T) {
+	t.Parallel()
+
+	s3client, s5cmd := setup(t)
+
+	bucket := s3BucketFromTestName(t)
+	createBucket(t, s3client, bucket)
+
+	// Create many destination files that will be deleted
+	destS3Content := make(map[string]string)
+	for i := 0; i < 10; i++ {
+		filename := fmt.Sprintf("file%d.txt", i)
+		destS3Content[filename] = fmt.Sprintf("content %d", i)
+	}
+
+	for filename, content := range destS3Content {
+		putFile(t, s3client, bucket, filename, content)
+	}
+
+	// Empty local directory (source)
+	workdir := fs.NewDir(t, "somedir")
+	defer workdir.Remove()
+
+	src := fmt.Sprintf("%v/", workdir.Path())
+	src = filepath.ToSlash(src)
+	dst := fmt.Sprintf("s3://%v/", bucket)
+
+	// No max-delete limit, should delete all files
+	cmd := s5cmd("sync", "--delete", src, dst)
+	result := icmd.RunCmd(cmd)
+
+	result.Assert(t, icmd.Success)
+
+	// Should delete all 10 files
+	expected := make(map[int]compareFunc)
+	for i := 0; i < 10; i++ {
+		filename := fmt.Sprintf("file%d.txt", i)
+		expected[i] = equals(fmt.Sprintf("rm %v%s", dst, filename))
+	}
+	assertLines(t, result.Stdout(), expected, sortInput(true))
+
+	// Verify all files are deleted
+	for filename, content := range destS3Content {
+		err := ensureS3Object(s3client, bucket, filename, content)
+		assertError(t, err, errS3NoSuchKey)
+	}
+}

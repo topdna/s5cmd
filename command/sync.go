@@ -72,6 +72,9 @@ Examples:
 
 	12. Sync all files to S3 bucket but include the only ones with txt and gz extension
 		 > s5cmd {{.HelpName}} --include "*.txt" --include "*.gz" dir/ s3://bucket
+
+	13. Sync and delete destination files but limit deletions to maximum 100 files
+		 > s5cmd {{.HelpName}} --delete --max-delete 100 dir/ s3://bucket
 `
 
 func NewSyncCommandFlags() []cli.Flag {
@@ -533,8 +536,9 @@ func (s Sync) planRun(
 			if len(dstURLs) == 0 {
 				return
 			}
-			if len(dstURLs) >= s.maxDelete && s.maxDelete >= 0 {
-				fmt.Printf("Not deleting due %d being higher than maximum delete limit\n", len(dstURLs))
+			if s.maxDelete >= 0 && len(dstURLs) > s.maxDelete {
+				err := fmt.Errorf("refusing to delete %d files; more than max-delete limit of %d", len(dstURLs), s.maxDelete)
+				printError(s.fullCommand, s.op, err)
 				return
 			}
 
