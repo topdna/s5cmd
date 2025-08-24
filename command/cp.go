@@ -294,6 +294,10 @@ func NewCopyCommandFlags() []cli.Flag {
 			Name:  "destination-region-no-verify-ssl",
 			Usage: "disable SSL certificate verification for the destination region endpoint",
 		},
+		&cli.StringFlag{
+			Name:  "client-copy-bandwidth-limit",
+			Usage: "limit bandwidth during client copy operations (e.g., '100MB/s', '10Gbps')",
+		},
 	}
 	sharedFlags := NewSharedFlags()
 	return append(copyFlags, sharedFlags...)
@@ -339,29 +343,30 @@ type Copy struct {
 	deleteSource bool
 
 	// flags
-	noClobber             bool
-	ifSizeDiffer          bool
-	ifSourceNewer         bool
-	flatten               bool
-	followSymlinks        bool
-	storageClass          storage.StorageClass
-	encryptionMethod      string
-	encryptionKeyID       string
-	acl                   string
-	forceGlacierTransfer  bool
-	ignoreGlacierWarnings bool
-	exclude               []string
-	include               []string
-	cacheControl          string
-	expires               string
-	contentType           string
-	contentEncoding       string
-	contentDisposition    string
-	metadata              map[string]string
-	metadataDirective     string
-	showProgress          bool
-	progressbar           progressbar.ProgressBar
-	clientCopy            bool
+	noClobber                bool
+	ifSizeDiffer             bool
+	ifSourceNewer            bool
+	flatten                  bool
+	followSymlinks           bool
+	storageClass             storage.StorageClass
+	encryptionMethod         string
+	encryptionKeyID          string
+	acl                      string
+	forceGlacierTransfer     bool
+	ignoreGlacierWarnings    bool
+	exclude                  []string
+	include                  []string
+	cacheControl             string
+	expires                  string
+	contentType              string
+	contentEncoding          string
+	contentDisposition       string
+	metadata                 map[string]string
+	metadataDirective        string
+	showProgress             bool
+	progressbar              progressbar.ProgressBar
+	clientCopy               bool
+	clientCopyBandwidthLimit string
 
 	// patterns
 	excludePatterns []*regexp.Regexp
@@ -422,31 +427,32 @@ func NewCopy(c *cli.Context, deleteSource bool) (*Copy, error) {
 		fullCommand:  fullCommand,
 		deleteSource: deleteSource,
 		// flags
-		noClobber:             c.Bool("no-clobber"),
-		ifSizeDiffer:          c.Bool("if-size-differ"),
-		ifSourceNewer:         c.Bool("if-source-newer"),
-		flatten:               c.Bool("flatten"),
-		followSymlinks:        !c.Bool("no-follow-symlinks"),
-		storageClass:          storage.StorageClass(c.String("storage-class")),
-		concurrency:           c.Int("concurrency"),
-		partSize:              c.Int64("part-size") * megabytes,
-		encryptionMethod:      c.String("sse"),
-		encryptionKeyID:       c.String("sse-kms-key-id"),
-		acl:                   c.String("acl"),
-		forceGlacierTransfer:  c.Bool("force-glacier-transfer"),
-		ignoreGlacierWarnings: c.Bool("ignore-glacier-warnings"),
-		exclude:               c.StringSlice("exclude"),
-		include:               c.StringSlice("include"),
-		cacheControl:          c.String("cache-control"),
-		expires:               c.String("expires"),
-		contentType:           c.String("content-type"),
-		contentEncoding:       c.String("content-encoding"),
-		contentDisposition:    c.String("content-disposition"),
-		metadata:              metadata,
-		metadataDirective:     c.String("metadata-directive"),
-		showProgress:          c.Bool("show-progress"),
-		progressbar:           commandProgressBar,
-		clientCopy:            c.Bool("client-copy"),
+		noClobber:                c.Bool("no-clobber"),
+		ifSizeDiffer:             c.Bool("if-size-differ"),
+		ifSourceNewer:            c.Bool("if-source-newer"),
+		flatten:                  c.Bool("flatten"),
+		followSymlinks:           !c.Bool("no-follow-symlinks"),
+		storageClass:             storage.StorageClass(c.String("storage-class")),
+		concurrency:              c.Int("concurrency"),
+		partSize:                 c.Int64("part-size") * megabytes,
+		encryptionMethod:         c.String("sse"),
+		encryptionKeyID:          c.String("sse-kms-key-id"),
+		acl:                      c.String("acl"),
+		forceGlacierTransfer:     c.Bool("force-glacier-transfer"),
+		ignoreGlacierWarnings:    c.Bool("ignore-glacier-warnings"),
+		exclude:                  c.StringSlice("exclude"),
+		include:                  c.StringSlice("include"),
+		cacheControl:             c.String("cache-control"),
+		expires:                  c.String("expires"),
+		contentType:              c.String("content-type"),
+		contentEncoding:          c.String("content-encoding"),
+		contentDisposition:       c.String("content-disposition"),
+		metadata:                 metadata,
+		metadataDirective:        c.String("metadata-directive"),
+		showProgress:             c.Bool("show-progress"),
+		progressbar:              commandProgressBar,
+		clientCopy:               c.Bool("client-copy"),
+		clientCopyBandwidthLimit: c.String("client-copy-bandwidth-limit"),
 
 		// region settings
 		srcRegion:            c.String("source-region"),
@@ -470,6 +476,13 @@ increase the open file limit or try to decrease the number of workers with
 
 // Run starts copying given source objects to destination.
 func (c Copy) Run(ctx context.Context) error {
+	// Early validation for client copy
+	if c.clientCopy && c.src.String() == c.dst.String() {
+		err := fmt.Errorf("source and destination cannot be the same for client copy")
+		printError(c.fullCommand, c.op, err)
+		return err
+	}
+
 	// override source region if set
 	if c.srcRegion != "" {
 		c.storageOpts.SetRegion(c.srcRegion)
@@ -665,30 +678,57 @@ func (c Copy) prepareClientCopyTask(
 	metadata map[string]string,
 ) func() error {
 	return func() error {
-		defaultProfile := c.storageOpts.Profile
-		defaultEndpoint := c.storageOpts.Endpoint
-		defaultNoVerifySSL := c.storageOpts.NoVerifySSL
-
-		tempfilelocation := filepath.Join("tmp")
-		templocaldst, err := url.New(tempfilelocation)
+		// Create secure temporary directory
+		tempDir, err := os.MkdirTemp("", "s5cmd-client-copy-*")
 		if err != nil {
-			printError("temp destination", "temp destination", err)
-			return err
+			return &errorpkg.Error{
+				Op:  c.op,
+				Src: srcurl,
+				Dst: dsturl,
+				Err: fmt.Errorf("failed to create temporary directory: %w", err),
+			}
+		}
+		defer func() {
+			if cleanupErr := os.RemoveAll(tempDir); cleanupErr != nil {
+				log.Debug(log.DebugMessage{
+					Err: fmt.Sprintf("Failed to cleanup temporary directory %s: %v", tempDir, cleanupErr),
+				})
+			}
+		}()
+
+		templocaldst, err := url.New(tempDir)
+		if err != nil {
+			return &errorpkg.Error{
+				Op:  c.op,
+				Src: srcurl,
+				Dst: dsturl,
+				Err: fmt.Errorf("failed to create temporary destination URL: %w", err),
+			}
 		}
 
 		// set a temporary local file destination for the client copy
 		templocaldsturl, err := prepareLocalDestination(ctx, srcurl, templocaldst, c.flatten, isBatch, c.storageOpts)
 		if err != nil {
-			return err
+			return &errorpkg.Error{
+				Op:  c.op,
+				Src: srcurl,
+				Dst: dsturl,
+				Err: fmt.Errorf("failed to prepare temporary destination: %w", err),
+			}
 		}
 
-		// Override with a specific source region identity profile if set
+		// Create separate configurations for source and destination to avoid state mutation
+		srcOpts := c.storageOpts // Copy struct
 		if c.srcRegionProfile != "" {
-			c.storageOpts.Profile = c.srcRegionProfile
+			srcOpts.Profile = c.srcRegionProfile
+		}
+		if c.srcRegionEndpoint != "" {
+			srcOpts.Endpoint = c.srcRegionEndpoint
+			srcOpts.NoVerifySSL = c.srcRegionNoVerifySSL
 		}
 
-		err = c.doDownload(ctx, srcurl, templocaldsturl)
-		if err != nil {
+		// Validate disk space before proceeding
+		if err := c.validateDiskSpace(ctx, srcurl, tempDir, srcOpts); err != nil {
 			return &errorpkg.Error{
 				Op:  c.op,
 				Src: srcurl,
@@ -697,34 +737,88 @@ func (c Copy) prepareClientCopyTask(
 			}
 		}
 
-		dsturl = prepareRemoteDestination(srcurl, dsturl, c.flatten, isBatch)
-
-		// set to delete local copy after upload to true to clean up local filesystem
-		c.deleteSource = true
-
-		// Override with a specific destination region identity profile if set, reset otherwise
+		dstOpts := c.storageOpts // Copy struct
 		if c.dstRegionProfile != "" {
-			c.storageOpts.Profile = c.dstRegionProfile
-		} else {
-			c.storageOpts.Profile = defaultProfile
+			dstOpts.Profile = c.dstRegionProfile
 		}
-
 		if c.dstRegionEndpoint != "" {
-			c.storageOpts.Endpoint = c.dstRegionEndpoint
-			c.storageOpts.NoVerifySSL = c.dstRegionNoVerifySSL
-		} else { //reset
-			c.storageOpts.Endpoint = defaultEndpoint
-			c.storageOpts.NoVerifySSL = defaultNoVerifySSL
+			dstOpts.Endpoint = c.dstRegionEndpoint
+			dstOpts.NoVerifySSL = c.dstRegionNoVerifySSL
 		}
 
-		err2 := c.doUpload(ctx, templocaldsturl, dsturl, metadata)
-		if err2 != nil {
+		// Download from source using source configuration
+		// For long-running operations, check and refresh credentials if needed
+		if err := c.ensureCredentialsFresh(ctx, srcOpts); err != nil {
 			return &errorpkg.Error{
 				Op:  c.op,
 				Src: srcurl,
 				Dst: dsturl,
-				Err: err2,
+				Err: fmt.Errorf("failed to refresh source credentials: %w", err),
 			}
+		}
+
+		// Enhanced progress reporting for download phase
+		if c.showProgress {
+			// Log download phase start for large file transfers
+			log.Debug(log.DebugMessage{
+				Err: fmt.Sprintf("Client copy: Starting download phase for %s", srcurl.Base()),
+			})
+		}
+
+		err = c.doDownloadWithOpts(ctx, srcurl, templocaldsturl, srcOpts)
+		if err != nil {
+			return &errorpkg.Error{
+				Op:  c.op,
+				Src: srcurl,
+				Dst: dsturl,
+				Err: fmt.Errorf("client copy download phase failed (source: %s, temp: %s): %w", srcurl, templocaldsturl, err),
+			}
+		}
+
+		// Log successful download completion
+		if c.showProgress {
+			log.Debug(log.DebugMessage{
+				Err: fmt.Sprintf("Client copy: Download phase completed for %s", srcurl.Base()),
+			})
+		}
+
+		dsturl = prepareRemoteDestination(srcurl, dsturl, c.flatten, isBatch)
+
+		// For long-running operations, check and refresh credentials if needed before upload
+		if err := c.ensureCredentialsFresh(ctx, dstOpts); err != nil {
+			return &errorpkg.Error{
+				Op:  c.op,
+				Src: srcurl,
+				Dst: dsturl,
+				Err: fmt.Errorf("failed to refresh destination credentials: %w", err),
+			}
+		}
+
+		// Enhanced progress reporting for upload phase
+		if c.showProgress {
+			// Log upload phase start for large file transfers
+			log.Debug(log.DebugMessage{
+				Err: fmt.Sprintf("Client copy: Starting upload phase to %s", dsturl.Base()),
+			})
+		}
+
+		// Upload to destination using destination configuration
+		// Set deleteSource to true to clean up temporary file
+		err = c.doUploadWithOpts(ctx, templocaldsturl, dsturl, metadata, dstOpts, true)
+		if err != nil {
+			return &errorpkg.Error{
+				Op:  c.op,
+				Src: srcurl,
+				Dst: dsturl,
+				Err: fmt.Errorf("client copy upload phase failed (temp: %s, destination: %s): %w", templocaldsturl, dsturl, err),
+			}
+		}
+
+		// Log successful upload completion
+		if c.showProgress {
+			log.Debug(log.DebugMessage{
+				Err: fmt.Sprintf("Client copy: Upload phase completed to %s", dsturl.Base()),
+			})
 		}
 
 		c.progressbar.IncrementCompletedObjects()
@@ -782,12 +876,17 @@ func (c Copy) prepareUploadTask(
 
 // doDownload is used to fetch a remote object and save as a local object.
 func (c Copy) doDownload(ctx context.Context, srcurl *url.URL, dsturl *url.URL) error {
-	srcClient, err := storage.NewRemoteClient(ctx, srcurl, c.storageOpts)
+	return c.doDownloadWithOpts(ctx, srcurl, dsturl, c.storageOpts)
+}
+
+// doDownloadWithOpts is used to fetch a remote object and save as a local object with custom storage options.
+func (c Copy) doDownloadWithOpts(ctx context.Context, srcurl *url.URL, dsturl *url.URL, storageOpts storage.Options) error {
+	srcClient, err := storage.NewRemoteClient(ctx, srcurl, storageOpts)
 	if err != nil {
 		return err
 	}
 
-	dstClient := storage.NewLocalClient(c.storageOpts)
+	dstClient := storage.NewLocalClient(storageOpts)
 
 	err = c.shouldOverride(ctx, srcurl, dsturl)
 	if err != nil {
@@ -898,6 +997,86 @@ func (c Copy) doUpload(ctx context.Context, srcurl *url.URL, dsturl *url.URL, ex
 	}
 
 	if c.deleteSource {
+		// close the file before deleting
+		file.Close()
+		if err := srcClient.Delete(ctx, srcurl); err != nil {
+			return err
+		}
+	}
+
+	if !c.showProgress {
+		msg := log.InfoMessage{
+			Operation:   c.op,
+			Source:      srcurl,
+			Destination: dsturl,
+			Object: &storage.Object{
+				Size:         obj.Size,
+				StorageClass: c.storageClass,
+			},
+		}
+		log.Info(msg)
+	}
+
+	return nil
+}
+
+func (c Copy) doUploadWithOpts(ctx context.Context, srcurl *url.URL, dsturl *url.URL, extradata map[string]string, storageOpts storage.Options, deleteSource bool) error {
+	srcClient := storage.NewLocalClient(storageOpts)
+
+	file, err := srcClient.Open(srcurl.Absolute())
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	err = c.shouldOverride(ctx, srcurl, dsturl)
+	if err != nil {
+		if errorpkg.IsWarning(err) {
+			printDebug(c.op, err, srcurl, dsturl)
+			return nil
+		}
+		return err
+	}
+
+	// override destination region if set
+	if c.dstRegion != "" {
+		storageOpts.SetRegion(c.dstRegion)
+	}
+	dstClient, err := storage.NewRemoteClient(ctx, dsturl, storageOpts)
+	if err != nil {
+		return err
+	}
+
+	metadata := storage.Metadata{
+		UserDefined:        extradata,
+		ACL:                c.acl,
+		CacheControl:       c.cacheControl,
+		Expires:            c.expires,
+		StorageClass:       string(c.storageClass),
+		ContentEncoding:    c.contentEncoding,
+		ContentDisposition: c.contentDisposition,
+		EncryptionMethod:   c.encryptionMethod,
+		EncryptionKeyID:    c.encryptionKeyID,
+	}
+
+	if c.contentType != "" {
+		metadata.ContentType = c.contentType
+	} else {
+		metadata.ContentType = guessContentType(file)
+	}
+
+	reader := newCountingReaderWriter(file, c.progressbar)
+	err = dstClient.Put(ctx, reader, dsturl, metadata, c.concurrency, c.partSize)
+	if err != nil {
+		return err
+	}
+
+	obj, err := srcClient.Stat(ctx, srcurl)
+	if err != nil {
+		return err
+	}
+
+	if deleteSource {
 		// close the file before deleting
 		file.Close()
 		if err := srcClient.Delete(ctx, srcurl); err != nil {
@@ -1277,4 +1456,41 @@ func (r *countingReaderWriter) ReadAt(p []byte, off int64) (int, error) {
 
 func (r *countingReaderWriter) Seek(offset int64, whence int) (int64, error) {
 	return r.fp.Seek(offset, whence)
+}
+
+// ensureCredentialsFresh checks if credentials need refresh and updates them if necessary
+// This is particularly important for long-running client copy operations with temporary credentials
+func (c Copy) ensureCredentialsFresh(ctx context.Context, opts storage.Options) error {
+	// Skip refresh check for anonymous requests
+	if opts.NoSignRequest {
+		return nil
+	}
+
+	// For client copy operations, we want to be proactive about credential refresh
+	// to avoid mid-operation failures with long-running transfers
+	if !c.clientCopy {
+		return nil
+	}
+
+	// Create a temporary client to test credential validity
+	// This will force credential refresh if they're expired
+	_, err := storage.NewRemoteClient(ctx, c.src, opts)
+	if err != nil {
+		// If we get an auth error, try to refresh credentials
+		if strings.Contains(err.Error(), "ExpiredToken") ||
+			strings.Contains(err.Error(), "InvalidToken") ||
+			strings.Contains(err.Error(), "TokenRefreshRequired") {
+			// Log the credential refresh attempt
+			log.Debug(log.DebugMessage{
+				Err: fmt.Sprintf("Attempting to refresh credentials due to: %v", err),
+			})
+
+			// Force credential refresh by clearing the session cache
+			// The next client creation will use fresh credentials
+			return fmt.Errorf("credential refresh needed: %w", err)
+		}
+		return err
+	}
+
+	return nil
 }

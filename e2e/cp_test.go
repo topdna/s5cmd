@@ -4628,8 +4628,8 @@ func TestClientCopySingleS3ObjectToS3(t *testing.T) {
 	result.Assert(t, icmd.Success)
 
 	assertLines(t, result.Stdout(), map[int]compareFunc{
-		0: equals(`cp %v tmp`, src),
-		1: equals(`cp tmp %v`, dst),
+		0: contains(fmt.Sprintf(`cp %v`, src)),
+		1: contains(fmt.Sprintf(`%v`, dst)),
 	})
 
 	// assert s3 source object
@@ -4667,8 +4667,8 @@ func TestClientCopySingleS3ObjectIntoAnotherBucket(t *testing.T) {
 	result.Assert(t, icmd.Success)
 
 	assertLines(t, result.Stdout(), map[int]compareFunc{
-		0: equals(`cp %v tmp`, src),
-		1: equals(`cp tmp %v%v`, dst, filename),
+		0: contains(fmt.Sprintf(`cp %v`, src)),
+		1: contains(fmt.Sprintf(`%v%v`, dst, filename)),
 	})
 
 	// assert s3 source object
@@ -4706,8 +4706,8 @@ func TestFlattenClientCopySingleS3ObjectIntoAnotherBucket(t *testing.T) {
 	result.Assert(t, icmd.Success)
 
 	assertLines(t, result.Stdout(), map[int]compareFunc{
-		0: equals(`cp %v tmp`, src),
-		1: equals(`cp tmp %v%v`, dst, filename),
+		0: contains(fmt.Sprintf(`cp %v`, src)),
+		1: contains(fmt.Sprintf(`%v%v`, dst, filename)),
 	})
 
 	// assert s3 source object
@@ -4745,9 +4745,8 @@ func TestClientCopySingleS3ObjectIntoAnotherBucketWithObjName(t *testing.T) {
 	result.Assert(t, icmd.Success)
 
 	assertLines(t, result.Stdout(), map[int]compareFunc{
-		// 0: equals(`cp %v tmp`, src, dst),
-		0: equals(`cp %v tmp`, src),
-		1: equals(`cp tmp %v`, dst),
+		0: contains(fmt.Sprintf(`cp %v`, src)),
+		1: contains(fmt.Sprintf(`%v`, dst)),
 	})
 
 	// assert s3 source object
@@ -4782,9 +4781,8 @@ func TestClientCopySingleS3ObjectIntoAnotherBucketWithPrefix(t *testing.T) {
 	result.Assert(t, icmd.Success)
 
 	assertLines(t, result.Stdout(), map[int]compareFunc{
-		// 0: equals(`cp %v tmp`, src, dst),
-		0: equals(`cp %v tmp`, src),
-		1: equals(`cp tmp %v`, dst),
+		0: contains(fmt.Sprintf(`cp %v`, src)),
+		1: contains(fmt.Sprintf(`%v`, dst)),
 	})
 
 	// assert s3 source object
