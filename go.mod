@@ -15,7 +15,6 @@ require (
 	github.com/termie/go-shutil v0.0.0-20140729215957-bcacb06fecae
 	github.com/urfave/cli/v2 v2.11.2
 	go.uber.org/mock v0.4.0
-	golang.org/x/time v0.12.0
 	gotest.tools/v3 v3.0.3
 	honnef.co/go/tools v0.6.1
 	mvdan.cc/unparam v0.0.0-20230312165513-e84e2d14e3b8
