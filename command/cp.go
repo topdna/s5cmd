@@ -298,6 +298,10 @@ func NewCopyCommandFlags() []cli.Flag {
 			Name:  "client-copy-bandwidth-limit",
 			Usage: "limit bandwidth during client copy operations (e.g., '100MB/s', '10Gbps')",
 		},
+		&cli.BoolFlag{
+			Name:  "client-copy-skip-disk-check",
+			Usage: "skip disk space validation for client copy operations (faster, but risky for large files)",
+		},
 	}
 	sharedFlags := NewSharedFlags()
 	return append(copyFlags, sharedFlags...)
@@ -367,6 +371,7 @@ type Copy struct {
 	progressbar              progressbar.ProgressBar
 	clientCopy               bool
 	clientCopyBandwidthLimit string
+	clientCopySkipDiskCheck  bool
 
 	// patterns
 	excludePatterns []*regexp.Regexp
@@ -453,6 +458,7 @@ func NewCopy(c *cli.Context, deleteSource bool) (*Copy, error) {
 		progressbar:              commandProgressBar,
 		clientCopy:               c.Bool("client-copy"),
 		clientCopyBandwidthLimit: c.String("client-copy-bandwidth-limit"),
+		clientCopySkipDiskCheck:  c.Bool("client-copy-skip-disk-check"),
 
 		// region settings
 		srcRegion:            c.String("source-region"),
@@ -481,6 +487,14 @@ func (c Copy) Run(ctx context.Context) error {
 		err := fmt.Errorf("source and destination cannot be the same for client copy")
 		printError(c.fullCommand, c.op, err)
 		return err
+	}
+
+	// Validate client copy requirements
+	if c.clientCopy {
+		if err := c.validateClientCopyConfig(); err != nil {
+			printError(c.fullCommand, c.op, err)
+			return err
+		}
 	}
 
 	// override source region if set
@@ -727,14 +741,45 @@ func (c Copy) prepareClientCopyTask(
 			srcOpts.NoVerifySSL = c.srcRegionNoVerifySSL
 		}
 
-		// Validate disk space before proceeding
-		if err := c.validateDiskSpace(ctx, srcurl, tempDir, srcOpts); err != nil {
+		// Initialize bandwidth limiter if specified
+		bandwidthLimiter, err := NewBandwidthLimiter(c.clientCopyBandwidthLimit)
+		if err != nil {
 			return &errorpkg.Error{
 				Op:  c.op,
 				Src: srcurl,
 				Dst: dsturl,
-				Err: err,
+				Err: fmt.Errorf("failed to initialize bandwidth limiter: %w", err),
 			}
+		}
+		if bandwidthLimiter.IsEnabled() {
+			log.Debug(log.DebugMessage{
+				Err: fmt.Sprintf("Client copy: Bandwidth limiting enabled at %s", c.clientCopyBandwidthLimit),
+			})
+		}
+
+		// Note: Bandwidth limiter integration would be implemented in storage layer
+
+		// Initialize metrics collection
+		metrics := NewClientCopyMetrics(srcurl.String(), dsturl.String(), c.clientCopyBandwidthLimit, c.clientCopySkipDiskCheck, tempDir)
+		defer metrics.LogSummary()
+
+		// Initialize retry logic
+		retryLogic := NewRetryableClientCopyOperation()
+
+		// Validate disk space before proceeding (unless skipped)
+		if !c.clientCopySkipDiskCheck {
+			if err := c.validateDiskSpace(ctx, srcurl, tempDir, srcOpts); err != nil {
+				return &errorpkg.Error{
+					Op:  c.op,
+					Src: srcurl,
+					Dst: dsturl,
+					Err: err,
+				}
+			}
+		} else {
+			log.Debug(log.DebugMessage{
+				Err: "Client copy: Disk space validation skipped per user request",
+			})
 		}
 
 		dstOpts := c.storageOpts // Copy struct
@@ -761,11 +806,17 @@ func (c Copy) prepareClientCopyTask(
 		if c.showProgress {
 			// Log download phase start for large file transfers
 			log.Debug(log.DebugMessage{
-				Err: fmt.Sprintf("Client copy: Starting download phase for %s", srcurl.Base()),
+				Err: fmt.Sprintf("Client copy: Starting download phase for %s (bandwidth limit: %s)",
+					srcurl.Base(),
+					getBandwidthStatus(c.clientCopyBandwidthLimit)),
 			})
 		}
 
-		err = c.doDownloadWithOpts(ctx, srcurl, templocaldsturl, srcOpts)
+		metrics.StartDownload()
+
+		err = retryLogic.ExecuteDownload(ctx, func() error {
+			return c.doDownloadWithOpts(ctx, srcurl, templocaldsturl, srcOpts)
+		})
 		if err != nil {
 			return &errorpkg.Error{
 				Op:  c.op,
@@ -781,6 +832,8 @@ func (c Copy) prepareClientCopyTask(
 				Err: fmt.Sprintf("Client copy: Download phase completed for %s", srcurl.Base()),
 			})
 		}
+
+		metrics.EndDownload()
 
 		dsturl = prepareRemoteDestination(srcurl, dsturl, c.flatten, isBatch)
 
@@ -798,13 +851,19 @@ func (c Copy) prepareClientCopyTask(
 		if c.showProgress {
 			// Log upload phase start for large file transfers
 			log.Debug(log.DebugMessage{
-				Err: fmt.Sprintf("Client copy: Starting upload phase to %s", dsturl.Base()),
+				Err: fmt.Sprintf("Client copy: Starting upload phase to %s (bandwidth limit: %s)",
+					dsturl.Base(),
+					getBandwidthStatus(c.clientCopyBandwidthLimit)),
 			})
 		}
 
+		metrics.StartUpload()
+
 		// Upload to destination using destination configuration
 		// Set deleteSource to true to clean up temporary file
-		err = c.doUploadWithOpts(ctx, templocaldsturl, dsturl, metadata, dstOpts, true)
+		err = retryLogic.ExecuteUpload(ctx, func() error {
+			return c.doUploadWithOpts(ctx, templocaldsturl, dsturl, metadata, dstOpts, true)
+		})
 		if err != nil {
 			return &errorpkg.Error{
 				Op:  c.op,
@@ -820,6 +879,8 @@ func (c Copy) prepareClientCopyTask(
 				Err: fmt.Sprintf("Client copy: Upload phase completed to %s", dsturl.Base()),
 			})
 		}
+
+		metrics.EndUpload()
 
 		c.progressbar.IncrementCompletedObjects()
 		return nil
@@ -1493,4 +1554,50 @@ func (c Copy) ensureCredentialsFresh(ctx context.Context, opts storage.Options) 
 	}
 
 	return nil
+}
+
+// validateClientCopyConfig performs early validation for client copy operations
+func (c Copy) validateClientCopyConfig() error {
+	// Ensure both source and destination are remote for client copy
+	if !c.src.IsRemote() || !c.dst.IsRemote() {
+		return fmt.Errorf("client copy requires both source and destination to be remote (S3) URLs")
+	}
+
+	// Validate source profile and endpoint compatibility
+	if c.srcRegionProfile != "" && c.srcRegionEndpoint == "" {
+		// Profile without endpoint is fine for AWS regions
+	} else if c.srcRegionProfile == "" && c.srcRegionEndpoint != "" {
+		// Endpoint without profile should have credentials available
+		log.Debug(log.DebugMessage{
+			Err: "Client copy: Custom endpoint without profile specified, ensure credentials are available",
+		})
+	}
+
+	// Validate destination profile and endpoint compatibility
+	if c.dstRegionProfile != "" && c.dstRegionEndpoint == "" {
+		// Profile without endpoint is fine for AWS regions
+	} else if c.dstRegionProfile == "" && c.dstRegionEndpoint != "" {
+		// Endpoint without profile should have credentials available
+		log.Debug(log.DebugMessage{
+			Err: "Client copy: Custom endpoint without profile specified, ensure credentials are available",
+		})
+	}
+
+	// Warn if using client copy for same-region transfers (less efficient)
+	if c.srcRegion != "" && c.dstRegion != "" && c.srcRegion == c.dstRegion &&
+		c.srcRegionEndpoint == c.dstRegionEndpoint {
+		log.Debug(log.DebugMessage{
+			Err: "Client copy: Same region and endpoint detected. Server-side copy might be more efficient.",
+		})
+	}
+
+	return nil
+}
+
+// getBandwidthStatus returns a human-readable bandwidth status string
+func getBandwidthStatus(limitStr string) string {
+	if limitStr == "" {
+		return "unlimited"
+	}
+	return limitStr
 }
