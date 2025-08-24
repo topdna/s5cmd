@@ -41,40 +41,6 @@ func TestClientCopyValidationChecks(t *testing.T) {
 		"Should detect same source/destination error, got: %s", errorOutput)
 }
 
-// TestClientCopyWithBandwidthLimitFlag tests that the bandwidth limit flag is accepted
-func TestClientCopyWithBandwidthLimitFlag(t *testing.T) {
-	t.Parallel()
-
-	s3client, s5cmd := setup(t)
-
-	bucket := s3BucketFromTestName(t)
-	createBucket(t, s3client, bucket)
-
-	const (
-		filename = "bandwidth_test.txt"
-		content  = "content for bandwidth testing"
-	)
-
-	putFile(t, s3client, bucket, filename, content)
-
-	src := fmt.Sprintf("s3://%v/%v", bucket, filename)
-	dst := fmt.Sprintf("s3://%v/bandwidth_copy_%v", bucket, filename)
-
-	// Test that the flag is accepted (even if not fully implemented yet)
-	cmd := s5cmd("cp", "--client-copy", "--client-copy-bandwidth-limit", "50MB/s", src, dst)
-	result := icmd.RunCmd(cmd)
-
-	// Should not fail due to unknown flag
-	if result.ExitCode != 0 && !strings.Contains(result.Stderr(), "NoSuchBucket") {
-		// Allow NoSuchBucket errors but not unknown flag errors
-		hasUnknownFlag := strings.Contains(result.Stderr(), "flag provided but not defined") ||
-			strings.Contains(result.Stderr(), "unknown flag")
-
-		assert.Assert(t, !hasUnknownFlag,
-			"Should accept bandwidth limit flag, got error: %s", result.Stderr())
-	}
-}
-
 // TestClientCopyCredentialRefresh tests the proactive credential refresh mechanism
 func TestClientCopyCredentialRefresh(t *testing.T) {
 	t.Parallel()

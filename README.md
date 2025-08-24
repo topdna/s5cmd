@@ -26,7 +26,6 @@ reasons for its fast speed, refer to [benchmarks](./README.md#Benchmarks) sectio
 
 **🚀 Advanced Client-Copy Feature** - A game-changing enhancement for S3-to-S3 transfers:
 - **🌐 Cross-service support**: Transfer between AWS S3, Google Cloud Storage, MinIO, and other S3-compatible services
-- **📈 Bandwidth control**: Limit network usage with configurable bandwidth limiting (`100MB/s`, `1Gbps`, etc.)
 - **🔄 Intelligent retry logic**: Exponential backoff with smart error classification for maximum reliability
 - **📊 Performance monitoring**: Real-time metrics, throughput analysis, and transfer optimization insights
 - **💾 Smart disk validation**: Cross-platform disk space checking with safety mechanisms
@@ -41,8 +40,8 @@ reasons for its fast speed, refer to [benchmarks](./README.md#Benchmarks) sectio
 
 **Usage example:**
 ```bash
-# Transfer between different cloud providers with bandwidth control
-s5cmd cp --client-copy --client-copy-bandwidth-limit 500MB/s \
+# Transfer between different cloud providers
+s5cmd cp --client-copy \
   --source-region-profile aws-prod \
   --destination-region-profile gcs-backup \
   --destination-region-endpoint-url https://storage.googleapis.com \
@@ -59,7 +58,7 @@ storage services and local filesystems.
 - List buckets and objects
 - Upload, download or delete objects
 - Move, copy or rename objects
-- **Advanced client-side copy** for S3-to-S3 transfers with bandwidth control and cross-service support
+- **Advanced client-side copy** for S3-to-S3 transfers with cross-service support
 - Set Server Side Encryption using AWS Key Management Service (KMS)
 - Set Access Control List (ACL) for objects/files on the upload, copy, move.
 - Print object contents to stdout
@@ -77,7 +76,6 @@ storage services and local filesystems.
 - S3 ListObjects API backward compatibility
 - **Intelligent retry logic** with exponential backoff for enhanced reliability
 - **Comprehensive performance monitoring** and metrics collection
-- **Bandwidth limiting** for network-constrained environments
 - **Cross-platform disk space validation** for safe transfers
 - **Configuration validation** with helpful error messages and suggestions
 
@@ -310,28 +308,18 @@ of the source.
 
     s5cmd cp --client-copy 's3://source-bucket/*' s3://dest-bucket/
 
-**Client-copy with bandwidth limiting:**
-
-    # Limit to 100 MB per second
-    s5cmd cp --client-copy --client-copy-bandwidth-limit 100MB/s 's3://source/*' s3://dest/
-
-    # Limit to 1 Gigabit per second
-    s5cmd cp --client-copy --client-copy-bandwidth-limit 1Gbps 's3://source/*' s3://dest/
-
 **Cross-service transfer (AWS S3 to Google Cloud Storage):**
 
     s5cmd cp --client-copy \
       --source-region-profile aws-production \
       --destination-region-profile gcs-backup \
       --destination-region-endpoint-url https://storage.googleapis.com \
-      --client-copy-bandwidth-limit 500MB/s \
       's3://aws-bucket/data/*' s3://gcs-bucket/backup/
 
 **High-performance transfer with custom settings:**
 
     s5cmd --numworkers 20 cp --client-copy \
       --concurrency 10 \
-      --client-copy-bandwidth-limit 1GB/s \
       --client-copy-skip-disk-check \
       's3://source-bucket/large-files/*' s3://dest-bucket/
 
@@ -348,12 +336,10 @@ of the source.
 
     s5cmd --log-level debug cp --client-copy \
       --show-progress \
-      --client-copy-bandwidth-limit 200MB/s \
       's3://large-dataset/*' s3://backup-bucket/
 
 ℹ️ **Client-copy flags reference:**
 - `--client-copy` / `-cc`: Enable client-side copy mode
-- `--client-copy-bandwidth-limit`: Limit transfer bandwidth (e.g., `100MB/s`, `1Gbps`)
 - `--client-copy-skip-disk-check`: Skip disk space validation (use with caution)
 - `--source-region-profile`: AWS profile for source bucket access
 - `--destination-region-profile`: AWS profile for destination bucket access
@@ -423,24 +409,10 @@ The client-copy feature downloads objects from the source to a temporary local d
 
 - **Cross-region transfers** with different credentials
 - **Cross-service transfers** (e.g., AWS S3 to Google Cloud Storage)
-- **Bandwidth control** for network-sensitive environments
 - **Enhanced monitoring** with detailed transfer metrics
 - **Robust error handling** with intelligent retry logic
 
-**Advanced client-copy with bandwidth limiting:**
-
-    # Limit bandwidth to 100 MB/s
-    s5cmd cp --client-copy --client-copy-bandwidth-limit 100MB/s 's3://source/*' s3://dest/
-
-    # Limit bandwidth to 10 Gbps
-    s5cmd cp --client-copy --client-copy-bandwidth-limit 10Gbps 's3://source/*' s3://dest/
-
-Supported bandwidth formats:
-- **Bytes per second**: `KB/s`, `MB/s`, `GB/s`
-- **Bits per second**: `Kbps`, `Mbps`, `Gbps`
-- **Examples**: `50MB/s`, `1GB/s`, `100Mbps`, `1.5Gbps`
-
-**Cross-service transfers with different credentials:**
+**Advanced client-copy with cross-service transfers:**
 
     # Transfer from AWS S3 to Google Cloud Storage
     s5cmd cp --client-copy \
@@ -460,9 +432,8 @@ Supported bandwidth formats:
     # Skip disk space validation for faster transfers (use with caution)
     s5cmd cp --client-copy --client-copy-skip-disk-check 's3://source/*' s3://dest/
 
-    # Combine with bandwidth limiting and custom endpoints
+    # Use custom endpoints
     s5cmd cp --client-copy \
-      --client-copy-bandwidth-limit 200MB/s \
       --source-region-endpoint-url https://s3.custom-provider.com \
       's3://source-bucket/*' s3://dest-bucket/
 
@@ -479,14 +450,13 @@ Supported bandwidth formats:
 
 - Transferring between different AWS accounts or regions with separate credentials
 - Moving data between different S3-compatible services (AWS S3 ↔ Google Cloud Storage ↔ MinIO)
-- Network-constrained environments requiring bandwidth control
 - Large-scale transfers requiring detailed monitoring and retry capabilities
 - Compliance scenarios requiring local temporary storage
 
 **Performance considerations:**
 
 - Client-copy requires local disk space equal to the largest file being transferred
-- Network bandwidth usage is doubled (download + upload)
+- Network usage is doubled (download + upload)
 - Best for scenarios where server-side copy is not available or insufficient
 - Use `--client-copy-skip-disk-check` only when you're certain about available disk space
 
@@ -926,18 +896,6 @@ If you have a few, large files to download, setting `--numworkers` to a very hig
 
 `s5cmd` includes comprehensive configuration validation, especially for advanced features like client-copy:
 
-**Bandwidth limit validation:**
-```bash
-# Valid formats
-s5cmd cp --client-copy --client-copy-bandwidth-limit 100MB/s source dest
-s5cmd cp --client-copy --client-copy-bandwidth-limit 1.5Gbps source dest
-
-# Invalid format with helpful error message
-$ s5cmd cp --client-copy --client-copy-bandwidth-limit 100invalid source dest
-ERROR: invalid bandwidth format '100invalid'. Valid formats: KB/s, MB/s, GB/s, Kbps, Mbps, Gbps
-Suggestion: Did you mean '100MB/s'?
-```
-
 **URL compatibility validation:**
 ```bash
 # Error for local-to-remote with client-copy
@@ -952,7 +910,7 @@ WARNING: destination endpoint specified without profile
 **Configuration validation features:**
 - **Format validation**: Strict validation with helpful error messages and correction suggestions
 - **Compatibility checks**: Ensures source and destination compatibility for client-copy operations
-- **Parameter validation**: Validates bandwidth limits, endpoint URLs, and credential configurations
+- **Parameter validation**: Validates endpoint URLs and credential configurations
 - **Early validation**: Catches configuration errors before initiating transfers
 
 ### Performance Monitoring and Metrics
@@ -961,7 +919,7 @@ Client-copy operations provide comprehensive performance monitoring:
 
 **Real-time metrics collection:**
 - **Transfer phases**: Separate timing for download and upload phases
-- **Throughput monitoring**: Peak throughput, average speed, and bandwidth efficiency
+- **Throughput monitoring**: Peak throughput and average speed analysis
 - **Resource usage**: Disk space utilization and temporary directory monitoring
 - **Error tracking**: Retry attempts, error counts, and failure categorization
 
@@ -978,8 +936,6 @@ Client Copy Operation Summary:
   Download Speed: 69.8 MB/s
   Upload Speed: 56.2 MB/s
   Peak Throughput: 89.3 MB/s
-  Bandwidth Limit: 100MB/s
-  Bandwidth Efficiency: 89.3%
   Disk Space Used: 1.2 GB
   Network Latency: 45ms
   Retry Attempts: 2
@@ -987,14 +943,13 @@ Client Copy Operation Summary:
 ```
 
 **Performance optimization insights:**
-- **Bandwidth efficiency**: Ratio of actual vs theoretical maximum throughput
+- **Throughput analysis**: Ratio of actual vs theoretical maximum throughput
 - **Phase analysis**: Identify whether download or upload is the bottleneck
 - **Retry impact**: Monitor how network issues affect overall transfer time
 - **Resource monitoring**: Track disk space usage for capacity planning
 
 **Monitoring best practices:**
 - Enable debug logging (`--log-level debug`) for detailed metrics
-- Monitor bandwidth efficiency to optimize bandwidth limit settings
 - Use metrics to identify optimal `--concurrency` settings
 - Track retry attempts to identify network reliability issues
 

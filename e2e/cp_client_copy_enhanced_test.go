@@ -9,78 +9,6 @@ import (
 	"gotest.tools/v3/icmd"
 )
 
-// TestClientCopyWithBandwidthLimitValidation tests bandwidth limit validation
-func TestClientCopyWithBandwidthLimitValidation(t *testing.T) {
-	t.Parallel()
-
-	_, s5cmd := setup(t)
-
-	// Test invalid bandwidth format
-	src := "s3://test-bucket/test-file.txt"
-	dst := "s3://test-bucket/test-file-copy.txt"
-
-	cmd := s5cmd("cp", "--client-copy", "--client-copy-bandwidth-limit", "invalid-format", src, dst)
-	result := icmd.RunCmd(cmd)
-
-	result.Assert(t, icmd.Expected{ExitCode: 1})
-
-	// Should contain bandwidth format error
-	errorOutput := result.Stderr()
-	hasBandwidthError := strings.Contains(errorOutput, "invalid bandwidth limit format") ||
-		strings.Contains(errorOutput, "bandwidth limit must end with") ||
-		strings.Contains(errorOutput, "unsupported bandwidth format")
-
-	assert.Assert(t, hasBandwidthError,
-		"Should detect invalid bandwidth format, got: %s", errorOutput)
-}
-
-// TestClientCopyWithValidBandwidthLimitFormats tests various valid bandwidth formats
-func TestClientCopyWithValidBandwidthLimitFormats(t *testing.T) {
-	t.Parallel()
-
-	s3client, s5cmd := setup(t)
-
-	bucket := s3BucketFromTestName(t)
-	createBucket(t, s3client, bucket)
-
-	const (
-		filename = "bandwidth_format_test.txt"
-		content  = "content for bandwidth format testing"
-	)
-
-	putFile(t, s3client, bucket, filename, content)
-
-	validFormats := []string{
-		"100KB/s",
-		"50MB/s",
-		"1GB/s",
-		"10Mbps",
-		"100Mbps",
-		"1Gbps",
-	}
-
-	for _, format := range validFormats {
-		t.Run("format_"+format, func(t *testing.T) {
-			src := fmt.Sprintf("s3://%v/%v", bucket, filename)
-			dst := fmt.Sprintf("s3://%v/copy_%s_%v", bucket, strings.ReplaceAll(format, "/", "_"), filename)
-
-			cmd := s5cmd("cp", "--client-copy", "--client-copy-bandwidth-limit", format, src, dst)
-			result := icmd.RunCmd(cmd)
-
-			// Should accept the format (may fail for other reasons in test environment)
-			if result.ExitCode != 0 {
-				errorOutput := result.Stderr()
-				hasBandwidthError := strings.Contains(errorOutput, "invalid bandwidth limit format") ||
-					strings.Contains(errorOutput, "bandwidth limit must end with") ||
-					strings.Contains(errorOutput, "unsupported bandwidth format")
-
-				assert.Assert(t, !hasBandwidthError,
-					"Should accept valid bandwidth format %s, got error: %s", format, errorOutput)
-			}
-		})
-	}
-}
-
 // TestClientCopyWithDiskSpaceValidation tests disk space validation functionality
 func TestClientCopyWithDiskSpaceValidation(t *testing.T) {
 	t.Parallel()
@@ -262,31 +190,10 @@ func TestClientCopyConfigurationValidation(t *testing.T) {
 		errorSubstr string
 	}{
 		{
-			name: "invalid bandwidth format",
-			args: []string{"cp", "--client-copy", "--client-copy-bandwidth-limit", "invalid",
+			name: "valid client copy",
+			args: []string{"cp", "--client-copy",
 				"s3://test/src", "s3://test/dst"},
-			expectError: true,
-			errorSubstr: "bandwidth",
-		},
-		{
-			name: "negative bandwidth",
-			args: []string{"cp", "--client-copy", "--client-copy-bandwidth-limit", "-100MB/s",
-				"s3://test/src", "s3://test/dst"},
-			expectError: true,
-			errorSubstr: "bandwidth",
-		},
-		{
-			name: "zero bandwidth",
-			args: []string{"cp", "--client-copy", "--client-copy-bandwidth-limit", "0MB/s",
-				"s3://test/src", "s3://test/dst"},
-			expectError: true,
-			errorSubstr: "bandwidth",
-		},
-		{
-			name: "valid bandwidth format",
-			args: []string{"cp", "--client-copy", "--client-copy-bandwidth-limit", "100MB/s",
-				"s3://test/src", "s3://test/dst"},
-			expectError: false, // May fail for other reasons, but not bandwidth format
+			expectError: false, // May fail for other reasons, but not configuration
 			errorSubstr: "",
 		},
 	}
@@ -303,15 +210,14 @@ func TestClientCopyConfigurationValidation(t *testing.T) {
 						"Expected error containing '%s', got: %s", tt.errorSubstr, result.Stderr())
 				}
 			} else {
-				// If not expecting bandwidth error, ensure we don't get one
+				// For valid configuration, we don't expect specific configuration errors
 				if result.ExitCode != 0 {
 					errorOutput := result.Stderr()
-					hasBandwidthError := strings.Contains(errorOutput, "invalid bandwidth limit format") ||
-						strings.Contains(errorOutput, "bandwidth limit must end with") ||
-						strings.Contains(errorOutput, "unsupported bandwidth format")
+					hasConfigError := strings.Contains(errorOutput, "invalid configuration") ||
+						strings.Contains(errorOutput, "configuration error")
 
-					assert.Assert(t, !hasBandwidthError,
-						"Should not have bandwidth format error for valid input, got: %s", errorOutput)
+					assert.Assert(t, !hasConfigError,
+						"Should not have configuration error for valid input, got: %s", errorOutput)
 				}
 			}
 		})

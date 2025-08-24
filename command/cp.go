@@ -294,10 +294,6 @@ func NewCopyCommandFlags() []cli.Flag {
 			Name:  "destination-region-no-verify-ssl",
 			Usage: "disable SSL certificate verification for the destination region endpoint",
 		},
-		&cli.StringFlag{
-			Name:  "client-copy-bandwidth-limit",
-			Usage: "limit bandwidth during client copy operations (e.g., '100MB/s', '10Gbps')",
-		},
 		&cli.BoolFlag{
 			Name:  "client-copy-skip-disk-check",
 			Usage: "skip disk space validation for client copy operations (faster, but risky for large files)",
@@ -347,31 +343,30 @@ type Copy struct {
 	deleteSource bool
 
 	// flags
-	noClobber                bool
-	ifSizeDiffer             bool
-	ifSourceNewer            bool
-	flatten                  bool
-	followSymlinks           bool
-	storageClass             storage.StorageClass
-	encryptionMethod         string
-	encryptionKeyID          string
-	acl                      string
-	forceGlacierTransfer     bool
-	ignoreGlacierWarnings    bool
-	exclude                  []string
-	include                  []string
-	cacheControl             string
-	expires                  string
-	contentType              string
-	contentEncoding          string
-	contentDisposition       string
-	metadata                 map[string]string
-	metadataDirective        string
-	showProgress             bool
-	progressbar              progressbar.ProgressBar
-	clientCopy               bool
-	clientCopyBandwidthLimit string
-	clientCopySkipDiskCheck  bool
+	noClobber               bool
+	ifSizeDiffer            bool
+	ifSourceNewer           bool
+	flatten                 bool
+	followSymlinks          bool
+	storageClass            storage.StorageClass
+	encryptionMethod        string
+	encryptionKeyID         string
+	acl                     string
+	forceGlacierTransfer    bool
+	ignoreGlacierWarnings   bool
+	exclude                 []string
+	include                 []string
+	cacheControl            string
+	expires                 string
+	contentType             string
+	contentEncoding         string
+	contentDisposition      string
+	metadata                map[string]string
+	metadataDirective       string
+	showProgress            bool
+	progressbar             progressbar.ProgressBar
+	clientCopy              bool
+	clientCopySkipDiskCheck bool
 
 	// patterns
 	excludePatterns []*regexp.Regexp
@@ -432,33 +427,32 @@ func NewCopy(c *cli.Context, deleteSource bool) (*Copy, error) {
 		fullCommand:  fullCommand,
 		deleteSource: deleteSource,
 		// flags
-		noClobber:                c.Bool("no-clobber"),
-		ifSizeDiffer:             c.Bool("if-size-differ"),
-		ifSourceNewer:            c.Bool("if-source-newer"),
-		flatten:                  c.Bool("flatten"),
-		followSymlinks:           !c.Bool("no-follow-symlinks"),
-		storageClass:             storage.StorageClass(c.String("storage-class")),
-		concurrency:              c.Int("concurrency"),
-		partSize:                 c.Int64("part-size") * megabytes,
-		encryptionMethod:         c.String("sse"),
-		encryptionKeyID:          c.String("sse-kms-key-id"),
-		acl:                      c.String("acl"),
-		forceGlacierTransfer:     c.Bool("force-glacier-transfer"),
-		ignoreGlacierWarnings:    c.Bool("ignore-glacier-warnings"),
-		exclude:                  c.StringSlice("exclude"),
-		include:                  c.StringSlice("include"),
-		cacheControl:             c.String("cache-control"),
-		expires:                  c.String("expires"),
-		contentType:              c.String("content-type"),
-		contentEncoding:          c.String("content-encoding"),
-		contentDisposition:       c.String("content-disposition"),
-		metadata:                 metadata,
-		metadataDirective:        c.String("metadata-directive"),
-		showProgress:             c.Bool("show-progress"),
-		progressbar:              commandProgressBar,
-		clientCopy:               c.Bool("client-copy"),
-		clientCopyBandwidthLimit: c.String("client-copy-bandwidth-limit"),
-		clientCopySkipDiskCheck:  c.Bool("client-copy-skip-disk-check"),
+		noClobber:               c.Bool("no-clobber"),
+		ifSizeDiffer:            c.Bool("if-size-differ"),
+		ifSourceNewer:           c.Bool("if-source-newer"),
+		flatten:                 c.Bool("flatten"),
+		followSymlinks:          !c.Bool("no-follow-symlinks"),
+		storageClass:            storage.StorageClass(c.String("storage-class")),
+		concurrency:             c.Int("concurrency"),
+		partSize:                c.Int64("part-size") * megabytes,
+		encryptionMethod:        c.String("sse"),
+		encryptionKeyID:         c.String("sse-kms-key-id"),
+		acl:                     c.String("acl"),
+		forceGlacierTransfer:    c.Bool("force-glacier-transfer"),
+		ignoreGlacierWarnings:   c.Bool("ignore-glacier-warnings"),
+		exclude:                 c.StringSlice("exclude"),
+		include:                 c.StringSlice("include"),
+		cacheControl:            c.String("cache-control"),
+		expires:                 c.String("expires"),
+		contentType:             c.String("content-type"),
+		contentEncoding:         c.String("content-encoding"),
+		contentDisposition:      c.String("content-disposition"),
+		metadata:                metadata,
+		metadataDirective:       c.String("metadata-directive"),
+		showProgress:            c.Bool("show-progress"),
+		progressbar:             commandProgressBar,
+		clientCopy:              c.Bool("client-copy"),
+		clientCopySkipDiskCheck: c.Bool("client-copy-skip-disk-check"),
 
 		// region settings
 		srcRegion:            c.String("source-region"),
@@ -733,26 +727,8 @@ func (c Copy) prepareClientCopyTask(
 			srcOpts.NoVerifySSL = c.srcRegionNoVerifySSL
 		}
 
-		// Initialize bandwidth limiter if specified
-		bandwidthLimiter, err := NewBandwidthLimiter(c.clientCopyBandwidthLimit)
-		if err != nil {
-			return &errorpkg.Error{
-				Op:  c.op,
-				Src: srcurl,
-				Dst: dsturl,
-				Err: fmt.Errorf("failed to initialize bandwidth limiter: %w", err),
-			}
-		}
-		if bandwidthLimiter.IsEnabled() {
-			log.Debug(log.DebugMessage{
-				Err: fmt.Sprintf("Client copy: Bandwidth limiting enabled at %s", c.clientCopyBandwidthLimit),
-			})
-		}
-
-		// Note: Bandwidth limiter integration would be implemented in storage layer
-
 		// Initialize metrics collection
-		metrics := NewClientCopyMetrics(srcurl.String(), dsturl.String(), c.clientCopyBandwidthLimit, c.clientCopySkipDiskCheck, tempDir)
+		metrics := NewClientCopyMetrics(srcurl.String(), dsturl.String(), c.clientCopySkipDiskCheck, tempDir)
 		defer metrics.LogSummary()
 
 		// Initialize retry logic
@@ -798,9 +774,8 @@ func (c Copy) prepareClientCopyTask(
 		if c.showProgress {
 			// Log download phase start for large file transfers
 			log.Debug(log.DebugMessage{
-				Err: fmt.Sprintf("Client copy: Starting download phase for %s (bandwidth limit: %s)",
-					srcurl.Base(),
-					getBandwidthStatus(c.clientCopyBandwidthLimit)),
+				Err: fmt.Sprintf("Client copy: Starting download phase for %s",
+					srcurl.Base()),
 			})
 		}
 
@@ -843,9 +818,8 @@ func (c Copy) prepareClientCopyTask(
 		if c.showProgress {
 			// Log upload phase start for large file transfers
 			log.Debug(log.DebugMessage{
-				Err: fmt.Sprintf("Client copy: Starting upload phase to %s (bandwidth limit: %s)",
-					dsturl.Base(),
-					getBandwidthStatus(c.clientCopyBandwidthLimit)),
+				Err: fmt.Sprintf("Client copy: Starting upload phase to %s",
+					dsturl.Base()),
 			})
 		}
 
@@ -1415,14 +1389,6 @@ func validateCopyCommand(c *cli.Context) error {
 		if !srcurl.IsRemote() || !dsturl.IsRemote() {
 			return fmt.Errorf("client copy requires both source and destination to be remote (S3) URLs")
 		}
-
-		// Validate bandwidth limit format early if specified
-		if bandwidthLimit := c.String("client-copy-bandwidth-limit"); bandwidthLimit != "" {
-			_, err := parseBandwidthLimit(bandwidthLimit)
-			if err != nil {
-				return fmt.Errorf("invalid bandwidth limit format: %w", err)
-			}
-		}
 	}
 
 	switch {
@@ -1562,12 +1528,4 @@ func (c Copy) ensureCredentialsFresh(ctx context.Context, opts storage.Options) 
 	}
 
 	return nil
-}
-
-// getBandwidthStatus returns a human-readable bandwidth status string
-func getBandwidthStatus(limitStr string) string {
-	if limitStr == "" {
-		return "unlimited"
-	}
-	return limitStr
 }

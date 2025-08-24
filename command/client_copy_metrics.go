@@ -17,7 +17,6 @@ type ClientCopyMetrics struct {
 	TotalBytes        int64
 	SourceURL         string
 	DestinationURL    string
-	BandwidthLimit    string
 	DiskCheckSkipped  bool
 	TempDir           string
 
@@ -39,12 +38,11 @@ type ThroughputSample struct {
 }
 
 // NewClientCopyMetrics creates a new metrics collection instance
-func NewClientCopyMetrics(sourceURL, destinationURL, bandwidthLimit string, diskCheckSkipped bool, tempDir string) *ClientCopyMetrics {
+func NewClientCopyMetrics(sourceURL, destinationURL string, diskCheckSkipped bool, tempDir string) *ClientCopyMetrics {
 	return &ClientCopyMetrics{
 		StartTime:         time.Now(),
 		SourceURL:         sourceURL,
 		DestinationURL:    destinationURL,
-		BandwidthLimit:    bandwidthLimit,
 		DiskCheckSkipped:  diskCheckSkipped,
 		TempDir:           tempDir,
 		ThroughputSamples: make([]ThroughputSample, 0),
@@ -175,7 +173,6 @@ func (m *ClientCopyMetrics) LogSummary() {
   Download Speed: %.2f MB/s
   Upload Speed: %.2f MB/s
   Peak Throughput: %.2f MB/s
-  Bandwidth Limit: %s
   Disk Check Skipped: %t
   Disk Space Used: %s
   Disk Space Available: %s
@@ -194,7 +191,6 @@ func (m *ClientCopyMetrics) LogSummary() {
 		m.GetDownloadSpeed()/(1024*1024),
 		m.GetUploadSpeed()/(1024*1024),
 		m.GetPeakThroughput()/(1024*1024),
-		getBandwidthStatusForMetrics(m.BandwidthLimit),
 		m.DiskCheckSkipped,
 		formatBytesOrNA(m.DiskSpaceUsed),
 		formatBytesOrNA(m.DiskSpaceAvailable),
@@ -208,14 +204,6 @@ func (m *ClientCopyMetrics) LogSummary() {
 	log.Debug(log.DebugMessage{
 		Err: summary,
 	})
-}
-
-// getBandwidthStatusForMetrics returns bandwidth status for metrics
-func getBandwidthStatusForMetrics(limitStr string) string {
-	if limitStr == "" {
-		return "unlimited"
-	}
-	return limitStr
 }
 
 // formatBytesOrNA formats bytes into human-readable format or "N/A" if zero
@@ -260,25 +248,6 @@ func (m *ClientCopyMetrics) GetPeakThroughput() float64 {
 	}
 
 	return maxThroughput
-}
-
-// GetEfficiency calculates the efficiency ratio (actual vs theoretical max speed)
-func (m *ClientCopyMetrics) GetEfficiency() float64 {
-	if m.BandwidthLimit == "" {
-		return 0 // No limit to compare against
-	}
-
-	limitBytes, err := parseBandwidthLimit(m.BandwidthLimit)
-	if err != nil {
-		return 0
-	}
-
-	actualSpeed := m.GetAverageSpeed()
-	if limitBytes > 0 {
-		return (actualSpeed / limitBytes) * 100 // Return as percentage
-	}
-
-	return 0
 }
 
 // formatBytes formats bytes into human-readable format
