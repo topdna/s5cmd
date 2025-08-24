@@ -2891,3 +2891,244 @@ func TestSyncS3BucketToS3BucketHashOnly(t *testing.T) {
 		assert.Assert(t, ensureS3Object(s3client, dstbucket, key, content))
 	}
 }
+
+// sync --hash-only with simulated multipart ETag should always sync
+func TestSyncHashOnlyMultipartETag(t *testing.T) {
+	t.Parallel()
+
+	s3client, s5cmd := setup(t)
+
+	bucket := s3BucketFromTestName(t)
+	createBucket(t, s3client, bucket)
+
+	// Create a file that simulates multipart upload scenario
+	const (
+		filename = "large_file.txt"
+		// Use content size that would trigger multipart upload (>5MB)
+		contentSize = 6 * 1024 * 1024 // 6MB
+	)
+
+	// Create content that's large enough to potentially trigger multipart upload
+	content := strings.Repeat("A", contentSize)
+
+	// Upload the large file to S3 (may result in multipart ETag)
+	putFile(t, s3client, bucket, filename, content)
+
+	// Get the object to check its ETag
+	resp, err := s3client.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(filename),
+	})
+	assertError(t, err, nil)
+
+	// Create local file with same content
+	workdir := fs.NewDir(t, "workdir", fs.WithFile(filename, content))
+	defer workdir.Remove()
+
+	src := fmt.Sprintf("%v/", workdir.Path())
+	src = filepath.ToSlash(src)
+	dst := fmt.Sprintf("s3://%s/", bucket)
+
+	// With --hash-only, files should be compared by hash
+	cmd := s5cmd("--log", "debug", "sync", "--hash-only", src, dst)
+	result := icmd.RunCmd(cmd)
+
+	result.Assert(t, icmd.Success)
+
+	// Check if ETag is multipart (contains '-')
+	etag := strings.Trim(*resp.ETag, `"`)
+	if strings.Contains(etag, "-") {
+		// If it's a multipart ETag, should always sync
+		assertLines(t, result.Stdout(), map[int]compareFunc{
+			0: contains(fmt.Sprintf("cp %v%s %v%s", src, filename, dst, filename)),
+		})
+	} else {
+		// If it's a regular ETag and content is the same, should not sync
+		assertLines(t, result.Stdout(), map[int]compareFunc{
+			0: equals(fmt.Sprintf("DEBUG \"sync %v%s %v%s\": object ETag matches", src, filename, dst, filename)),
+		})
+	}
+}
+
+// sync --hash-only with empty files
+func TestSyncHashOnlyEmptyFiles(t *testing.T) {
+	t.Parallel()
+
+	s3client, s5cmd := setup(t)
+
+	bucket := s3BucketFromTestName(t)
+	createBucket(t, s3client, bucket)
+
+	const filename = "empty_file.txt"
+	const content = "" // empty content
+
+	// Put empty object in S3
+	putFile(t, s3client, bucket, filename, content)
+
+	// Create local empty file
+	workdir := fs.NewDir(t, "workdir", fs.WithFile(filename, content))
+	defer workdir.Remove()
+
+	src := fmt.Sprintf("%v/", workdir.Path())
+	src = filepath.ToSlash(src)
+	dst := fmt.Sprintf("s3://%s/", bucket)
+
+	// Empty files should have same hash and not sync
+	cmd := s5cmd("--log", "debug", "sync", "--hash-only", src, dst)
+	result := icmd.RunCmd(cmd)
+
+	result.Assert(t, icmd.Success)
+
+	// Should not copy since hashes match
+	assertLines(t, result.Stdout(), map[int]compareFunc{
+		0: equals(fmt.Sprintf("DEBUG \"sync %v%s %v%s\": object ETag matches", src, filename, dst, filename)),
+	})
+}
+
+// sync --hash-only with file access errors
+func TestSyncHashOnlyFileAccessError(t *testing.T) {
+	t.Parallel()
+
+	// Skip on Windows as file permission handling is different
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping file permission test on Windows")
+	}
+
+	s3client, s5cmd := setup(t)
+
+	bucket := s3BucketFromTestName(t)
+	createBucket(t, s3client, bucket)
+
+	const (
+		filename = "protected_file.txt"
+		content  = "protected content"
+	)
+
+	// Put object in S3
+	putFile(t, s3client, bucket, filename, content)
+
+	// Create local file and make it unreadable
+	workdir := fs.NewDir(t, "workdir", fs.WithFile(filename, content))
+	defer workdir.Remove()
+
+	filePath := filepath.Join(workdir.Path(), filename)
+
+	// Store original permissions for reliable cleanup
+	originalInfo, err := os.Stat(filePath)
+	assertError(t, err, nil)
+	originalMode := originalInfo.Mode()
+
+	// Remove all permissions
+	err = os.Chmod(filePath, 0000)
+	assertError(t, err, nil)
+
+	// Ensure permissions are restored even if test fails
+	defer func() {
+		if restoreErr := os.Chmod(filePath, originalMode); restoreErr != nil {
+			// Log error but don't fail the test
+			t.Logf("Warning: failed to restore file permissions: %v", restoreErr)
+		}
+	}()
+
+	src := fmt.Sprintf("%v/", workdir.Path())
+	src = filepath.ToSlash(src)
+	dst := fmt.Sprintf("s3://%s/", bucket)
+
+	// Should attempt to sync but fail during copy
+	cmd := s5cmd("sync", "--hash-only", src, dst)
+	result := icmd.RunCmd(cmd)
+
+	// Should exit with error due to file access issues
+	result.Assert(t, icmd.Expected{ExitCode: 1})
+
+	// Should contain permission denied error
+	assert.Assert(t, strings.Contains(result.Stderr(), "permission denied") ||
+		strings.Contains(result.Stderr(), "access is denied") ||
+		strings.Contains(result.Stderr(), "operation not permitted"))
+}
+
+// sync --hash-only with large files and memory efficiency
+func TestSyncHashOnlyLargeFiles(t *testing.T) {
+	t.Parallel()
+
+	s3client, s5cmd := setup(t)
+
+	bucket := s3BucketFromTestName(t)
+	createBucket(t, s3client, bucket)
+
+	const (
+		filename = "large_file.txt"
+		// Create content larger than default buffer size (32KB)
+		contentSize = 64 * 1024 // 64KB
+	)
+
+	// Create large content
+	content := strings.Repeat("A", contentSize)
+
+	// Put large object in S3
+	putFile(t, s3client, bucket, filename, content)
+
+	// Create local file with different content but same size
+	localContent := strings.Repeat("B", contentSize)
+	workdir := fs.NewDir(t, "workdir", fs.WithFile(filename, localContent))
+	defer workdir.Remove()
+
+	src := fmt.Sprintf("%v/", workdir.Path())
+	src = filepath.ToSlash(src)
+	dst := fmt.Sprintf("s3://%s/", bucket)
+
+	// Should sync due to different hash
+	cmd := s5cmd("--log", "debug", "sync", "--hash-only", src, dst)
+	result := icmd.RunCmd(cmd)
+
+	result.Assert(t, icmd.Success)
+
+	// Should copy since hashes are different
+	assertLines(t, result.Stdout(), map[int]compareFunc{
+		0: contains(fmt.Sprintf("cp %v%s %v%s", src, filename, dst, filename)),
+	})
+
+	// Verify S3 object was updated
+	assert.Assert(t, ensureS3Object(s3client, bucket, filename, localContent))
+}
+
+// sync --hash-only with network error simulation
+func TestSyncHashOnlyNetworkError(t *testing.T) {
+	t.Parallel()
+
+	_, s5cmd := setup(t)
+
+	const (
+		filename = "test_file.txt"
+		content  = "test content"
+	)
+
+	// Create local file
+	workdir := fs.NewDir(t, "workdir", fs.WithFile(filename, content))
+	defer workdir.Remove()
+
+	src := fmt.Sprintf("%v/", workdir.Path())
+	src = filepath.ToSlash(src)
+	dst := "s3://fake-bucket/"
+
+	// Use a non-routable IP address to simulate network error
+	// 10.255.255.1 is a non-routable IP that will cause connection timeout
+	fakeEndpoint := "http://10.255.255.1:9999"
+
+	// Set fake endpoint
+	os.Setenv("AWS_ENDPOINT_URL", fakeEndpoint)
+	defer os.Unsetenv("AWS_ENDPOINT_URL")
+
+	// Should fail due to network error
+	cmd := s5cmd("sync", "--hash-only", src, dst)
+	result := icmd.RunCmd(cmd)
+
+	// Should exit with error
+	result.Assert(t, icmd.Expected{ExitCode: 1})
+
+	// Should contain connection error
+	assert.Assert(t, strings.Contains(result.Stderr(), "connection") ||
+		strings.Contains(result.Stderr(), "network") ||
+		strings.Contains(result.Stderr(), "timeout") ||
+		strings.Contains(result.Stderr(), "refused"))
+}

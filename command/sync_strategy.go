@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"io"
 	"os"
+	"strings"
 
 	errorpkg "github.com/peak/s5cmd/v2/error"
 	"github.com/peak/s5cmd/v2/storage"
@@ -67,6 +68,12 @@ func (sm *SizeAndModificationStrategy) ShouldSync(srcObj, dstObj *storage.Object
 //	md5 hash: can't open src			should sync: yes (but cp won't be able to open the file)
 type HashStrategy struct{}
 
+// isMultipartETag detects if an ETag is from a multipart upload
+// Multipart upload ETags contain a dash followed by part count (e.g., "abc123-5")
+func isMultipartETag(etag string) bool {
+	return strings.Contains(etag, "-")
+}
+
 func (s *HashStrategy) ShouldSync(srcObj, dstObj *storage.Object) error {
 	// Firstly check size. Maybe the sizes will be different.
 	if srcObj.Size != dstObj.Size {
@@ -75,6 +82,11 @@ func (s *HashStrategy) ShouldSync(srcObj, dstObj *storage.Object) error {
 
 	srcHash := getHash(srcObj)
 	dstHash := getHash(dstObj)
+
+	// Always sync multipart uploads as ETags are not reliable for comparison
+	if isMultipartETag(srcHash) || isMultipartETag(dstHash) {
+		return nil
+	}
 
 	if srcHash == dstHash {
 		return errorpkg.ErrObjectEtagsMatch
@@ -96,13 +108,24 @@ func getHash(obj *storage.Object) string {
 		// Not sure about this place. Maybe should throw exception and stop execution.
 		// But if can't open file here, then can't open file in cp and upload it.
 		if err != nil {
+			// Return empty string to force sync, allowing cp to handle the actual error
 			return ""
 		}
-		defer file.Close()
+		defer func() {
+			if closeErr := file.Close(); closeErr != nil {
+				// Intentionally ignore close errors as this is best-effort cleanup
+				// The file operation has already completed successfully
+				_ = closeErr
+			}
+		}()
 
-		var md5Obj = md5.New()
-		buf := make([]byte, obj.Size)
+		md5Obj := md5.New()
+		// Use fixed buffer size instead of file size to prevent OOM for large files
+		const bufferSize = 32 * 1024 // 32KB chunks
+		buf := make([]byte, bufferSize)
 		if _, err := io.CopyBuffer(md5Obj, file, buf); err != nil {
+			// Return empty string to force sync if hash calculation fails
+			// This ensures the file will be copied and the actual error will surface during cp
 			return ""
 		}
 
