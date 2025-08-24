@@ -489,14 +489,6 @@ func (c Copy) Run(ctx context.Context) error {
 		return err
 	}
 
-	// Validate client copy requirements
-	if c.clientCopy {
-		if err := c.validateClientCopyConfig(); err != nil {
-			printError(c.fullCommand, c.op, err)
-			return err
-		}
-	}
-
 	// override source region if set
 	if c.srcRegion != "" {
 		c.storageOpts.SetRegion(c.srcRegion)
@@ -1417,6 +1409,22 @@ func validateCopyCommand(c *cli.Context) error {
 		return err
 	}
 
+	// Validate client copy requirements
+	if c.Bool("client-copy") {
+		// Ensure both source and destination are remote for client copy
+		if !srcurl.IsRemote() || !dsturl.IsRemote() {
+			return fmt.Errorf("client copy requires both source and destination to be remote (S3) URLs")
+		}
+
+		// Validate bandwidth limit format early if specified
+		if bandwidthLimit := c.String("client-copy-bandwidth-limit"); bandwidthLimit != "" {
+			_, err := parseBandwidthLimit(bandwidthLimit)
+			if err != nil {
+				return fmt.Errorf("invalid bandwidth limit format: %w", err)
+			}
+		}
+	}
+
 	switch {
 	case srcurl.Type == dsturl.Type:
 		return validateCopy(srcurl, dsturl)
@@ -1551,44 +1559,6 @@ func (c Copy) ensureCredentialsFresh(ctx context.Context, opts storage.Options) 
 			return fmt.Errorf("credential refresh needed: %w", err)
 		}
 		return err
-	}
-
-	return nil
-}
-
-// validateClientCopyConfig performs early validation for client copy operations
-func (c Copy) validateClientCopyConfig() error {
-	// Ensure both source and destination are remote for client copy
-	if !c.src.IsRemote() || !c.dst.IsRemote() {
-		return fmt.Errorf("client copy requires both source and destination to be remote (S3) URLs")
-	}
-
-	// Validate source profile and endpoint compatibility
-	if c.srcRegionProfile != "" && c.srcRegionEndpoint == "" {
-		// Profile without endpoint is fine for AWS regions
-	} else if c.srcRegionProfile == "" && c.srcRegionEndpoint != "" {
-		// Endpoint without profile should have credentials available
-		log.Debug(log.DebugMessage{
-			Err: "Client copy: Custom endpoint without profile specified, ensure credentials are available",
-		})
-	}
-
-	// Validate destination profile and endpoint compatibility
-	if c.dstRegionProfile != "" && c.dstRegionEndpoint == "" {
-		// Profile without endpoint is fine for AWS regions
-	} else if c.dstRegionProfile == "" && c.dstRegionEndpoint != "" {
-		// Endpoint without profile should have credentials available
-		log.Debug(log.DebugMessage{
-			Err: "Client copy: Custom endpoint without profile specified, ensure credentials are available",
-		})
-	}
-
-	// Warn if using client copy for same-region transfers (less efficient)
-	if c.srcRegion != "" && c.dstRegion != "" && c.srcRegion == c.dstRegion &&
-		c.srcRegionEndpoint == c.dstRegionEndpoint {
-		log.Debug(log.DebugMessage{
-			Err: "Client copy: Same region and endpoint detected. Server-side copy might be more efficient.",
-		})
 	}
 
 	return nil

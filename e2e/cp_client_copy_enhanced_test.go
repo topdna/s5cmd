@@ -27,7 +27,8 @@ func TestClientCopyWithBandwidthLimitValidation(t *testing.T) {
 	// Should contain bandwidth format error
 	errorOutput := result.Stderr()
 	hasBandwidthError := strings.Contains(errorOutput, "invalid bandwidth limit format") ||
-		strings.Contains(errorOutput, "bandwidth limit must end with")
+		strings.Contains(errorOutput, "bandwidth limit must end with") ||
+		strings.Contains(errorOutput, "unsupported bandwidth format")
 
 	assert.Assert(t, hasBandwidthError,
 		"Should detect invalid bandwidth format, got: %s", errorOutput)
@@ -70,7 +71,8 @@ func TestClientCopyWithValidBandwidthLimitFormats(t *testing.T) {
 			if result.ExitCode != 0 {
 				errorOutput := result.Stderr()
 				hasBandwidthError := strings.Contains(errorOutput, "invalid bandwidth limit format") ||
-					strings.Contains(errorOutput, "bandwidth limit must end with")
+					strings.Contains(errorOutput, "bandwidth limit must end with") ||
+					strings.Contains(errorOutput, "unsupported bandwidth format")
 
 				assert.Assert(t, !hasBandwidthError,
 					"Should accept valid bandwidth format %s, got error: %s", format, errorOutput)
@@ -305,7 +307,8 @@ func TestClientCopyConfigurationValidation(t *testing.T) {
 				if result.ExitCode != 0 {
 					errorOutput := result.Stderr()
 					hasBandwidthError := strings.Contains(errorOutput, "invalid bandwidth limit format") ||
-						strings.Contains(errorOutput, "bandwidth limit must end with")
+						strings.Contains(errorOutput, "bandwidth limit must end with") ||
+						strings.Contains(errorOutput, "unsupported bandwidth format")
 
 					assert.Assert(t, !hasBandwidthError,
 						"Should not have bandwidth format error for valid input, got: %s", errorOutput)

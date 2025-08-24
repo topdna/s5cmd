@@ -294,8 +294,3 @@ func formatBytes(bytes int64) string {
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
-
-// formatSpeed formats speed into human-readable format
-func formatSpeed(bytesPerSecond float64) string {
-	return formatBytes(int64(bytesPerSecond)) + "/s"
-}
